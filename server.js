@@ -44,6 +44,9 @@ app.use((req, res, next) => {
 
 // ---------- Archivos estáticos públicos ----------
 app.get('/inicio.html', (_req, res) => res.redirect('/inicio'));
+
+// Sirve estáticos tanto en /public/... como en /...
+app.use('/public', express.static(path.join(__dirname, 'public'), { index: false }));
 app.use(express.static(path.join(__dirname, 'public'), { index: false }));
 
 // Evitar 404 por favicon
