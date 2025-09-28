@@ -1,4 +1,4 @@
-// server.js — Express + sesiones, login y /inicio protegido (CSP fija + saneo de meta-CSP)
+// server.js — Express + sesiones, login y /inicio protegido (CSP forzada)
 import express from 'express';
 import path from 'path';
 import cookieParser from 'cookie-parser';
@@ -14,42 +14,49 @@ const __dirname = path.dirname(__filename);
 const app = express();
 
 // ---------- Seguridad / básicos ----------
-app.set('trust proxy', 1); // necesario en Railway para cookies 'secure'
-app.use(helmet({ contentSecurityPolicy: false })); // no dejamos que helmet meta su CSP
+app.disable('x-powered-by');
+app.set('trust proxy', 1);
+app.use(helmet({ contentSecurityPolicy: false })); // no metas CSP automáticas
 app.use(compression());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
-// ---------- CSP manual y explícita para TODAS las respuestas ----------
+// ---------- CSP (forzada justo antes de enviar headers) ----------
+const CSP_VALUE = [
+  "default-src 'self'",
+  "script-src 'self' https://cdn.tailwindcss.com https://cdn.jsdelivr.net 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://www.gstatic.com",
+  "style-src-elem 'self' 'unsafe-inline' https://fonts.googleapis.com https://www.gstatic.com",
+  "font-src 'self' https://fonts.gstatic.com data:",
+  "img-src 'self' data:",
+  "connect-src 'self' https://api.weather.com https://api.open-meteo.com",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "frame-ancestors 'self'",
+  "upgrade-insecure-requests"
+].join('; ');
+
 app.use((req, res, next) => {
-  res.setHeader(
-    'Content-Security-Policy',
-    [
-      "default-src 'self'",
-      "script-src 'self' https://cdn.tailwindcss.com https://cdn.jsdelivr.net 'unsafe-inline'",
-      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://www.gstatic.com",
-      "style-src-elem 'self' 'unsafe-inline' https://fonts.googleapis.com https://www.gstatic.com",
-      "font-src 'self' https://fonts.gstatic.com data:",
-      "img-src 'self' data:",
-      "connect-src 'self' https://api.weather.com https://api.open-meteo.com",
-      "object-src 'none'",
-      "base-uri 'self'",
-      "frame-ancestors 'self'",
-      "upgrade-insecure-requests"
-    ].join('; ')
-  );
+  const originalWriteHead = res.writeHead;
+  res.writeHead = function patchedWriteHead(statusCode, reasonPhrase, headers) {
+    try {
+      // borra cualquier CSP previa y coloca la nuestra
+      res.removeHeader('Content-Security-Policy');
+      res.setHeader('Content-Security-Policy', CSP_VALUE);
+    } catch (_) {}
+    return originalWriteHead.call(this, statusCode, reasonPhrase, headers);
+  };
   next();
 });
 
-// ---------- Archivos estáticos públicos ----------
+// ---------- Estáticos ----------
 app.get('/inicio.html', (_req, res) => res.redirect('/inicio'));
-
-// Sirve estáticos tanto en /public/... como en /...
+// compatibilidad: sirve en /public/... y en /...
 app.use('/public', express.static(path.join(__dirname, 'public'), { index: false }));
 app.use(express.static(path.join(__dirname, 'public'), { index: false }));
 
-// Evitar 404 por favicon
+// Evitar 404 típico por favicon
 app.get('/favicon.ico', (_req, res) => res.status(204).end());
 
 // ---------- Home ----------
@@ -58,7 +65,7 @@ app.get('/', (req, res) => {
   return res.redirect('/login');
 });
 
-// ---------- Guardia global para rutas protegidas ----------
+// ---------- Guardia global ----------
 function hasSession(req) {
   return !!(req.session && req.session.user);
 }
@@ -73,11 +80,10 @@ app.use((req, res, next) => {
   next();
 });
 
-// ---------- Helper: servir HTML removiendo meta http-equiv CSP ----------
+// ---------- Helper: servir HTML quitando meta-CSP ----------
 function sendHTMLWithoutMetaCSP(absPath, res) {
   try {
     let html = fs.readFileSync(absPath, 'utf8');
-    // quita cualquier meta http-equiv="Content-Security-Policy"
     html = html.replace(/<meta[^>]*http-equiv=["']Content-Security-Policy["'][^>]*>/gi, '');
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     return res.send(html);
@@ -129,9 +135,9 @@ app.get('/api/datos', (_req, res) => {
   res.json({ ok: true, msg: 'Solo con sesión', ts: Date.now() });
 });
 
-// ---------- Healthcheck Railway ----------
-app.get('/health', (_req, res) => res.status(200).send('ok')); // en inglés
-app.get('/salud',  (_req, res) => res.status(200).send('ok')); // en español
+// ---------- Healthcheck ----------
+app.get('/health', (_req, res) => res.status(200).send('ok'));
+app.get('/salud',  (_req, res) => res.status(200).send('ok'));
 
 // ---------- Start ----------
 const PORT = process.env.PORT || 3000;
